@@ -4,21 +4,16 @@ import random
 import requests
 import openai
 from dotenv import load_dotenv
-load_dotenv()  # Load the .env file first
-import openai
-import os
 
-api_key = os.getenv("OPENAI_API_KEY", "")
-print("Using API key:", api_key[:4] + "..." + api_key[-4:])
-
-openai.api_key = api_key
-
-# Load environment variables from .env if present
+# Load environment variables from .env (only once, at the beginning)
 load_dotenv()
 
-# Retrieve Finnhub and OpenAI keys
+# Retrieve API keys from the environment
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+
+# Print a truncated version of the API key to confirm loading
+print("Using API key:", OPENAI_API_KEY[:4] + "..." + OPENAI_API_KEY[-4:])
 
 # Set your OpenAI API key at the module level (old API style)
 openai.api_key = OPENAI_API_KEY
@@ -50,6 +45,15 @@ def get_quote(symbol):
     resp = requests.get(url)
     resp.raise_for_status()
     return resp.json()
+
+# ----------------------------
+# Helper: Truncate text to a max length
+# ----------------------------
+def truncate_text(text, max_length=200):
+    """Truncates the given text to at most max_length characters."""
+    if len(text) <= max_length:
+        return text
+    return text[:max_length] + "..."
 
 # ----------------------------
 # 3) Analyze a Single Stock using the old OpenAI API
@@ -93,23 +97,26 @@ def analyze_stock_with_openai(symbol, quote):
         return "OpenAI call failed"
 
 # ----------------------------
-# 4) Compare All Stocks from Past 5 Minutes
+# 4) Compare All Stocks from Past 1 Minute
 # ----------------------------
 def compare_stocks_with_openai(analyzed_stocks):
     """
-    Takes a list of (symbol, quote, analysis, timestamp) from the last 5 minutes
+    Takes a list of (symbol, quote, analysis, timestamp) from the last minute
     and asks OpenAI to pick the best high-yield option.
+    Uses truncated analysis texts to help control token usage.
     Returns the AI's final recommendation (string).
     """
     prompt_list = []
     for item in analyzed_stocks:
         symbol = item["symbol"]
         quote = item["quote"]
-        analysis = item["analysis"]
+        # Truncate the analysis text to reduce token count
+        analysis = truncate_text(item["analysis"], max_length=200)
         prompt_list.append(f"Symbol: {symbol}\nPrice: {quote['c']}\nAI Analysis: {analysis}\n")
+    
     summary_of_stocks = "\n".join(prompt_list)
     prompt = f"""
-    You have the following stock analyses from the last 5 minutes:
+    You have the following stock analyses from the last minute:
 
     {summary_of_stocks}
 
@@ -143,11 +150,14 @@ def main():
     print(f"Total symbols fetched: {len(all_symbols)}")
     analyzed_stocks = []
     last_comparison_time = time.time()
-    comparison_interval = 5 * 60  # 5 minutes
+    comparison_interval = 60  # Change interval to 1 minute (60 seconds)
 
     while True:
         loop_start = time.time()
+        
+        # Choose a random stock symbol
         symbol = random.choice(all_symbols)
+        
         try:
             quote_data = get_quote(symbol)
         except requests.HTTPError as e:
@@ -155,6 +165,7 @@ def main():
             time.sleep(1)
             continue
 
+        # Analyze the stock
         ai_analysis = analyze_stock_with_openai(symbol, quote_data)
         analyzed_stocks.append({
             "symbol": symbol,
@@ -165,11 +176,12 @@ def main():
 
         now = time.time()
         if now - last_comparison_time >= comparison_interval:
-            print("\n[COMPARISON] 5 minutes have passed, comparing all analyzed stocks...\n")
+            print("\n[COMPARISON] 1 minute has passed, comparing all analyzed stocks...\n")
             best_pick = compare_stocks_with_openai(analyzed_stocks)
-            print("[RESULT] AI's top pick among last 5 minutes:\n")
+            print("[RESULT] AI's top pick among last 1 minute:\n")
             print(best_pick)
             print("\n===================================================\n")
+            # Clear the list for the next minute's analysis
             analyzed_stocks.clear()
             last_comparison_time = now
 
